@@ -992,9 +992,19 @@
                             <span>小时</h1></span>
                         </div>
                          <div class="metric-card" id="total-cost-card" style="display:none;">
-                            <h4>总等效成本</h4>
+                            <h4>项目总成本</h4>
                             <p id="summary-total-cost">-</p>
-                            <span>MWh (等效)</span>
+                            <span>万元</span>
+                        </div>
+                        <div class="metric-card" id="equivalent-capacity-card" style="display:none;">
+                            <h4>总等效容量</h4>
+                            <p id="summary-equivalent-capacity">-</p>
+                            <span>MWh</span>
+                        </div>
+                        <div class="metric-card" id="unit-price-card" style="display:none;">
+                            <h4>应用单价</h4>
+                            <p id="summary-unit-price">-</p>
+                            <span>元/Wh</span>
                         </div>
                     </div>
                 </div>
@@ -1046,8 +1056,7 @@
     <footer class="main-footer">
         <div class="footer-container animate-on-scroll">
             <div class="footer-content">
-                <p>储能系统方案配置工具 V1.0 &copy; 2025.5</p> <div class="author-info">
-                    <p>作者: 卢文博 | <a href="mailto:luwenbo@sungrowpower.com">luwenbo@sungrowpower.com</a></p>
+                <p>储能系统方案配置工具 V2.0 &copy; 2025.5</p> <div class="author-info">
                 </div>
             </div>
         </div>
@@ -1346,6 +1355,11 @@
             const summaryTotalCost = document.getElementById("summary-total-cost");
             const totalCostCard = document.getElementById("total-cost-card");
             const summarySystemHourType = document.getElementById("summary-system-hour-type");
+            // V3.0: 新增字段
+            const summaryEquivalentCapacity = document.getElementById("summary-equivalent-capacity");
+            const equivalentCapacityCard = document.getElementById("equivalent-capacity-card");
+            const summaryUnitPrice = document.getElementById("summary-unit-price");
+            const unitPriceCard = document.getElementById("unit-price-card");
 
             const acSideContainer = document.getElementById("ac-side-container");
             const acSideList = document.getElementById("ac-side-list");
@@ -1425,7 +1439,11 @@
                     summaryConfigPower.textContent = "-";
                     summaryConfigCapacity.textContent = "-";
                     summaryTotalCost.textContent = "-";
+                    summaryEquivalentCapacity.textContent = "-";
+                    summaryUnitPrice.textContent = "-";
                     totalCostCard.style.display = selectedSystemValue === "overall" ? "block" : "none";
+                    equivalentCapacityCard.style.display = "none";
+                    unitPriceCard.style.display = "none";
                     summarySystemHourType.textContent = "-";
                     // 清除实际功率输出显示
                     summaryActualPower.textContent = "-";
@@ -1442,7 +1460,7 @@
 
                 summaryInputPower.textContent = projectPowerMw.toFixed(2);
                 summaryInputCapacity.textContent = projectCapacityMwh.toFixed(2);
-                ['summary-config-power', 'summary-config-capacity', 'summary-total-cost', 'summary-system-hour-type', 'param-dc-family', 'param-chosen-dc-specs'].forEach(id => {
+                ['summary-config-power', 'summary-config-capacity', 'summary-total-cost', 'summary-equivalent-capacity', 'summary-unit-price', 'summary-system-hour-type', 'param-dc-family', 'param-chosen-dc-specs'].forEach(id => {
                     const el = document.getElementById(id);
                     if (el) el.textContent = "-";
                 });
@@ -1450,7 +1468,12 @@
                 summaryActualPower.textContent = "-";
                 actualPowerCard.style.display = "none";
                 actualPowerNote.style.display = "none";
+                // V3.0: 清除新字段
+                summaryEquivalentCapacity.textContent = "-";
+                summaryUnitPrice.textContent = "-";
                 totalCostCard.style.display = selectedSystemValue === "overall" ? "block" : "none";
+                equivalentCapacityCard.style.display = "none";
+                unitPriceCard.style.display = "none";
                 acSideList.innerHTML = ""; dcSideList.innerHTML = "";
                 essBlocksDiagrams.innerHTML = ""; 
                 if(essBlocksDetailsTextContainer) essBlocksDetailsTextContainer.innerHTML = ""; // Clear new container
@@ -1486,10 +1509,12 @@
                     }
 
                     solutionMessage.textContent = "计算完成。";
-                    solutionMessage.className = (finalResult.cost === Infinity || finalResult.cost == null) ? "message-error" : "message-success";
+                    // V3.0: 检查total_cost而非cost
+                    const resultCost = finalResult.total_cost !== undefined ? finalResult.total_cost : finalResult.cost;
+                    solutionMessage.className = (resultCost === Infinity || resultCost == null) ? "message-error" : "message-success";
 
 
-                    if (finalResult.cost === Infinity || finalResult.cost == null) {
+                    if (resultCost === Infinity || resultCost == null) {
                         document.getElementById("solution-summary-metrics").style.display = "block"; 
                         return; 
                     }
@@ -1556,11 +1581,32 @@
                     paramChosenDcSpecs.textContent = finalResult.chosen_global_dc_specs ? finalResult.chosen_global_dc_specs.join(", ") : "-";
                     solutionParametersSection.style.display = "block";
                     
-                    if (selectedSystemValue === "overall" && finalResult.cost !== undefined) {
-                        summaryTotalCost.textContent = finalResult.cost.toFixed(2);
-                        totalCostCard.style.display = "block";
+                    // V3.0: 显示真实成本、等效容量和单价
+                    if (selectedSystemValue === "overall") {
+                        if (finalResult.total_cost !== undefined && finalResult.total_cost !== Infinity) {
+                            summaryTotalCost.textContent = finalResult.total_cost.toFixed(2);
+                            totalCostCard.style.display = "block";
+                        } else {
+                            totalCostCard.style.display = "none";
+                        }
+                        
+                        if (finalResult.equivalent_capacity !== undefined) {
+                            summaryEquivalentCapacity.textContent = finalResult.equivalent_capacity.toFixed(3);
+                            equivalentCapacityCard.style.display = "block";
+                        } else {
+                            equivalentCapacityCard.style.display = "none";
+                        }
+                        
+                        if (finalResult.unit_price !== undefined && finalResult.unit_price > 0) {
+                            summaryUnitPrice.textContent = finalResult.unit_price.toFixed(2);
+                            unitPriceCard.style.display = "block";
+                        } else {
+                            unitPriceCard.style.display = "none";
+                        }
                     } else {
                         totalCostCard.style.display = "none";
+                        equivalentCapacityCard.style.display = "none";
+                        unitPriceCard.style.display = "none";
                     }
 
                     if (finalResult.block_details_for_display && finalResult.block_details_for_display.length > 0) {

@@ -9,7 +9,7 @@ DC_CONTAINER_SPECS = {
     "ST5015UX_5MW_2R": {"family": "5MW", "capacity_mwh": 4.180, "base_clusters": 12, "reduced_clusters": 2, "name_cn": "5MWh标准电池舱(减2簇)"},
     "ST5015UX_5MW_3R": {"family": "5MW", "capacity_mwh": 3.762, "base_clusters": 12, "reduced_clusters": 3, "name_cn": "5MWh标准电池舱(减3簇)"},
     "ST5015UX_5MW_4R": {"family": "5MW", "capacity_mwh": 3.344, "base_clusters": 12, "reduced_clusters": 4, "name_cn": "5MWh标准电池舱(减4簇)"},
-    "ST7523UX_7_5MW_0R": {"family": "7.5MW", "capacity_mwh": 7.523, "base_clusters": 18, "reduced_clusters": 0, "name_cn": "7.5MWh标准电池舱(不减簇)"},
+    "ST7523UX_7_5MW_0R": {"family": "7.5MW", "capacity_mwh": 7.5225, "base_clusters": 18, "reduced_clusters": 0, "name_cn": "7.5MWh标准电池舱(不减簇)"},
     "ST7523UX_7_5MW_2R": {"family": "7.5MW", "capacity_mwh": 6.686, "base_clusters": 18, "reduced_clusters": 2, "name_cn": "7.5MWh标准电池舱(减2簇)"},
     "ST7523UX_7_5MW_4R": {"family": "7.5MW", "capacity_mwh": 5.851, "base_clusters": 18, "reduced_clusters": 4, "name_cn": "7.5MWh标准电池舱(减4簇)"},
     "ST7523UX_7_5MW_6R": {"family": "7.5MW", "capacity_mwh": 5.015, "base_clusters": 18, "reduced_clusters": 6, "name_cn": "7.5MWh标准电池舱(减6簇)"},
@@ -17,17 +17,49 @@ DC_CONTAINER_SPECS = {
 
 PCS_SPECS = {
     "PCS_5MW": {"power_mw": 5.0, "cost_eq_mwh": 1.25, "name_cn": "5MW逆变升压一体舱"},
-    "PCS_7_5MW": {"power_mw": 7.5, "cost_eq_mwh": 1.875, "name_cn": "7.5MW逆变升压一体舱"}
+    "PCS_7_5MW": {"power_mw": 7.5, "cost_eq_mwh": 1.875, "name_cn": "7.5MW逆变升压一体舱"},
+    "PCS_2_5MW": {"power_mw": 2.5, "cost_eq_mwh": 0.625, "name_cn": "2.5MW逆变升压一体舱"}  # V3.1新增
 }
 
 ALL_DC_SPEC_KEYS = list(DC_CONTAINER_SPECS.keys())
 EPSILON = 1e-9
+
+# V3.0: 成本单价定义表（元/Wh）
+UNIT_PRICE_TABLE = {
+    2: {  # 2h系统
+        "7.5MW": 0.46,
+        "5MW": 0.51
+    },
+    4: {  # 4h系统
+        "7.5MW": 0.41,
+        "5MW": 0.43
+    },
+    6: {  # 6h系统
+        "7.5MW": 0.41,
+        "5MW": 0.43
+    }
+}
 
 def get_dc_spec_by_name(name):
     return DC_CONTAINER_SPECS[name]
 
 def get_pcs_spec_by_name(name):
     return PCS_SPECS[name]
+
+def get_unit_price(system_hour_type, dc_family):
+    """
+    获取单价（元/Wh）
+    
+    Args:
+        system_hour_type: 系统时长类型 (2, 4, 6)
+        dc_family: 电池舱家族 ("5MW" 或 "7.5MW")
+    
+    Returns:
+        float: 单价（元/Wh），如果未定义则返回None
+    """
+    if system_hour_type not in UNIT_PRICE_TABLE:
+        return None
+    return UNIT_PRICE_TABLE[system_hour_type].get(dc_family)
 
 def calculate_project_duration_type(project_power_mw, project_capacity_mwh):
     if project_power_mw <= EPSILON:
@@ -47,7 +79,7 @@ def calculate_project_duration_type(project_power_mw, project_capacity_mwh):
 
 # --- 辅助函数定义 (从第一个文件迁移) ---
 def get_pcs_configuration_summary_map(blocks_config_list):
-    pcs_counts_map = {"PCS_5MW": 0, "PCS_7_5MW": 0}
+    pcs_counts_map = {"PCS_5MW": 0, "PCS_7_5MW": 0, "PCS_2_5MW": 0}  # V3.1: 新增PCS_2_5MW
     if blocks_config_list: # blocks_config_list is like [(count, block_data), ...]
         for num_blocks, block_data in blocks_config_list:
             pcs_name = block_data["pcs_name"]
@@ -68,10 +100,11 @@ def get_total_physical_dc_containers_count(blocks_config_list):
 def generate_single_ess_block_configs(global_dc_spec_names, system_hour_type, project_duration_hours, target_dc_family_filter):
     ess_blocks = []
     
-    # V2.29: 6h系统特殊处理 - 强制使用5MW PCS，且最多4个电池舱
+    # V2.29 & V3.1: 6h系统特殊处理 - 允许5MW PCS和2.5MW PCS
     if system_hour_type == 6:
-        # 6h系统只能使用5MW PCS，且受4个电池舱限制
+        # 6h系统允许使用5MW PCS（最多4个电池舱）和2.5MW PCS（V3.1新增，7.5MW家族专用）
         if target_dc_family_filter == "7.5MW":
+            # === 配置1：5MW PCS（原有逻辑）===
             pcs_spec = PCS_SPECS["PCS_5MW"]
             pcs_name = "PCS_5MW"
             pcs_power = pcs_spec["power_mw"]
@@ -129,7 +162,9 @@ def generate_single_ess_block_configs(global_dc_spec_names, system_hour_type, pr
                         can_form_block_based_on_power = True
                     
                     if can_form_block_based_on_power:
-                        block_cost = round(pcs_cost + current_block_dc_capacity, 3)
+                        # V3.0: 计算等效容量和真实成本
+                        block_equivalent_capacity = round(pcs_cost + current_block_dc_capacity, 3)
+                        # 单价根据系统时长和DC家族确定，这里先使用等效容量，稍后转换
                         block_desc_str = f"{pcs_spec.get('name_cn',pcs_name)} + {n_dc_on_pcs}电池舱 ({'; '.join(actual_dc_components_desc)})"
                         ess_blocks.append({
                             "pcs_name": pcs_name, 
@@ -137,11 +172,55 @@ def generate_single_ess_block_configs(global_dc_spec_names, system_hour_type, pr
                             "pcs_power_mw": pcs_power, 
                             "dc_containers_detail_list": actual_dc_components_list_for_block, 
                             "block_dc_capacity_mwh": current_block_dc_capacity, 
-                            "block_equivalent_cost_mwh": block_cost, 
+                            "block_equivalent_capacity_mwh": block_equivalent_capacity,  # V3.0: 改名
                             "block_description": block_desc_str
                         })
+            
+            # === 配置2：2.5MW PCS（V3.1新增）===
+            # 6h系统：2.5MW + 2个7.5MWh（不减簇）
+            pcs_spec_2_5 = PCS_SPECS["PCS_2_5MW"]
+            pcs_name_2_5 = "PCS_2_5MW"
+            pcs_power_2_5 = pcs_spec_2_5["power_mw"]
+            pcs_cost_2_5 = pcs_spec_2_5["cost_eq_mwh"]
+            
+            # 查找不减簇电池舱
+            dc_spec_0r = "ST7523UX_7_5MW_0R"
+            if dc_spec_0r in global_dc_spec_names:
+                dc_spec_info = get_dc_spec_by_name(dc_spec_0r)
+                # 2个不减簇电池舱
+                num_dc_2_5 = 2
+                current_block_dc_capacity_2_5 = num_dc_2_5 * dc_spec_info["capacity_mwh"]
+                current_block_dc_capacity_2_5 = round(current_block_dc_capacity_2_5, 3)
+                
+                # 功率检查
+                can_form_block = False
+                if system_hour_type > EPSILON:
+                    required_avg_power = current_block_dc_capacity_2_5 / system_hour_type
+                    pcs_power_limit = pcs_power_2_5 * 1.01
+                    if required_avg_power <= pcs_power_limit + EPSILON:
+                        can_form_block = True
+                
+                if can_form_block:
+                    block_equivalent_capacity_2_5 = round(pcs_cost_2_5 + current_block_dc_capacity_2_5, 3)
+                    actual_dc_components_list_2_5 = [{
+                        "name": dc_spec_0r,
+                        "count": num_dc_2_5,
+                        "capacity_per_unit": dc_spec_info["capacity_mwh"],
+                        "name_cn": dc_spec_info.get("name_cn", dc_spec_0r)
+                    }]
+                    block_desc_str_2_5 = f"{pcs_spec_2_5.get('name_cn',pcs_name_2_5)} + {num_dc_2_5}电池舱 ({num_dc_2_5}x{dc_spec_info.get('name_cn', dc_spec_0r)})"
+                    
+                    ess_blocks.append({
+                        "pcs_name": pcs_name_2_5,
+                        "pcs_name_cn": pcs_spec_2_5.get('name_cn', pcs_name_2_5),
+                        "pcs_power_mw": pcs_power_2_5,
+                        "dc_containers_detail_list": actual_dc_components_list_2_5,
+                        "block_dc_capacity_mwh": current_block_dc_capacity_2_5,
+                        "block_equivalent_capacity_mwh": block_equivalent_capacity_2_5,
+                        "block_description": block_desc_str_2_5
+                    })
         
-        # 6h系统只返回5MW PCS的配置，不继续执行其他逻辑
+        # 6h系统只返回5MW和2.5MW PCS的配置，不继续执行其他逻辑
         return ess_blocks
     
     # 其他系统时长的原有逻辑完全保持不变
@@ -183,19 +262,85 @@ def generate_single_ess_block_configs(global_dc_spec_names, system_hour_type, pr
                     if required_avg_power_for_block <= pcs_power_limit_with_tolerance + EPSILON: can_form_block_based_on_power = True
                 elif abs(current_block_dc_capacity) < EPSILON: can_form_block_based_on_power = True
                 if can_form_block_based_on_power:
-                    block_cost = round(pcs_cost + current_block_dc_capacity, 3)
+                    # V3.0: 计算等效容量
+                    block_equivalent_capacity = round(pcs_cost + current_block_dc_capacity, 3)
                     block_desc_str = f"{pcs_spec.get('name_cn',pcs_name)} + {n_dc_on_pcs}电池舱 ({'; '.join(actual_dc_components_desc)})"
                     ess_blocks.append({
                         "pcs_name": pcs_name, "pcs_name_cn": pcs_spec.get('name_cn',pcs_name),
                         "pcs_power_mw": pcs_power, 
                         "dc_containers_detail_list": actual_dc_components_list_for_block,
                         "block_dc_capacity_mwh": current_block_dc_capacity,
-                        "block_equivalent_cost_mwh": block_cost,
+                        "block_equivalent_capacity_mwh": block_equivalent_capacity,  # V3.0: 改名
                         "block_description": block_desc_str
                     })
+    
+    # V3.1: 为7.5MW家族添加2.5MW PCS的固定配置（2h和4h系统）
+    if target_dc_family_filter == "7.5MW" and system_hour_type in [2, 4]:
+        pcs_spec_2_5 = PCS_SPECS["PCS_2_5MW"]
+        pcs_name_2_5 = "PCS_2_5MW"
+        pcs_power_2_5 = pcs_spec_2_5["power_mw"]
+        pcs_cost_2_5 = pcs_spec_2_5["cost_eq_mwh"]
+        
+        # 查找减6簇电池舱
+        dc_spec_6r = "ST7523UX_7_5MW_6R"
+        if dc_spec_6r in global_dc_spec_names:
+            dc_spec_info = get_dc_spec_by_name(dc_spec_6r)
+            
+            if system_hour_type == 2:
+                # 2h系统：2.5MW + 1个减6簇
+                num_dc = 1
+            elif system_hour_type == 4:
+                # 4h系统：2.5MW + 2个减6簇
+                num_dc = 2
+            else:
+                num_dc = 0
+            
+            if num_dc > 0:
+                current_block_dc_capacity = num_dc * dc_spec_info["capacity_mwh"]
+                current_block_dc_capacity = round(current_block_dc_capacity, 3)
+                
+                # 功率检查
+                can_form_block = False
+                if system_hour_type > EPSILON:
+                    required_avg_power = current_block_dc_capacity / system_hour_type
+                    pcs_power_limit = pcs_power_2_5 * 1.01
+                    if required_avg_power <= pcs_power_limit + EPSILON:
+                        can_form_block = True
+                
+                if can_form_block:
+                    block_equivalent_capacity = round(pcs_cost_2_5 + current_block_dc_capacity, 3)
+                    actual_dc_components_list = [{
+                        "name": dc_spec_6r,
+                        "count": num_dc,
+                        "capacity_per_unit": dc_spec_info["capacity_mwh"],
+                        "name_cn": dc_spec_info.get("name_cn", dc_spec_6r)
+                    }]
+                    block_desc_str = f"{pcs_spec_2_5.get('name_cn',pcs_name_2_5)} + {num_dc}电池舱 ({num_dc}x{dc_spec_info.get('name_cn', dc_spec_6r)})"
+                    
+                    ess_blocks.append({
+                        "pcs_name": pcs_name_2_5,
+                        "pcs_name_cn": pcs_spec_2_5.get('name_cn', pcs_name_2_5),
+                        "pcs_power_mw": pcs_power_2_5,
+                        "dc_containers_detail_list": actual_dc_components_list,
+                        "block_dc_capacity_mwh": current_block_dc_capacity,
+                        "block_equivalent_capacity_mwh": block_equivalent_capacity,
+                        "block_description": block_desc_str
+                    })
+    
     return ess_blocks
 
-def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, available_ess_blocks, max_device_sets=100):
+def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, available_ess_blocks, system_hour_type, target_dc_family, max_device_sets=100):
+    # V3.0: 获取单价
+    unit_price = get_unit_price(system_hour_type, target_dc_family)
+    if unit_price is None:
+        # 如果没有定义单价，返回错误
+        return {
+            "cost": float('inf'), "power": 0, "capacity": 0, "blocks_config": [], 
+            "block_details_for_message": [], "block_details_for_display": [], 
+            "user_limit_warning": f"系统时长类型{system_hour_type}h和DC家族{target_dc_family}的单价未定义", 
+            "total_dc_containers_calc": float('inf')
+        }
+    
     best_solution = {
         "cost": float('inf'), "power": 0, "capacity": 0, "blocks_config": [], 
         "block_details_for_message": [], "block_details_for_display": [], "user_limit_warning": "", "total_dc_containers_calc": float('inf')
@@ -245,7 +390,8 @@ def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, 
     elif system_hour_type >= 8:
         s3_max_sets = 5
         
-    INTERNAL_COST_TIE_EPSILON = 0.01 # V2.20 引入
+    # V3.0: 内部成本平衡阈值改为动态计算（万元）
+    INTERNAL_COST_TIE_EPSILON = 0.01 * 100 * unit_price  # 0.01 MWh × 100 × 单价
 
     def _calculate_actual_power_output(blocks_config):
         """计算考虑PCS和直流容量双重约束的实际功率输出"""
@@ -289,8 +435,12 @@ def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, 
                 best_solution.update({"cost": cc_cost, "power": cc_power, "capacity": cc_capacity, "blocks_config": cc_blocks_config, "total_dc_containers_calc": cc_total_dc_containers })
 
         for block_type1 in available_ess_blocks: # Scenario 1
-            current_power = num_total_sel_blocks * block_type1["pcs_power_mw"]; current_capacity = num_total_sel_blocks * block_type1["block_dc_capacity_mwh"]; current_cost = num_total_sel_blocks * block_type1["block_equivalent_cost_mwh"]
-            current_power = round(current_power,3); current_capacity = round(current_capacity,3); current_cost = round(current_cost,3)
+            current_power = num_total_sel_blocks * block_type1["pcs_power_mw"]
+            current_capacity = num_total_sel_blocks * block_type1["block_dc_capacity_mwh"]
+            # V3.0: 计算真实成本（万元）= 等效容量 × 100 × 单价
+            current_equivalent_capacity = num_total_sel_blocks * block_type1["block_equivalent_capacity_mwh"]
+            current_cost = current_equivalent_capacity * 100 * unit_price  # 万元
+            current_power = round(current_power,3); current_capacity = round(current_capacity,3); current_cost = round(current_cost,2)
             
             # 检查容量约束
             if current_capacity >= project_capacity_mwh - EPSILON:
@@ -322,8 +472,12 @@ def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, 
                     for num_type1_blocks in range(1, num_total_sel_blocks): 
                         num_type2_blocks = num_total_sel_blocks - num_type1_blocks
                         if num_type2_blocks <= 0: continue 
-                        current_power_s2 = (num_type1_blocks * block_type1["pcs_power_mw"] + num_type2_blocks * block_type2["pcs_power_mw"]); current_capacity_s2 = (num_type1_blocks * block_type1["block_dc_capacity_mwh"] + num_type2_blocks * block_type2["block_dc_capacity_mwh"]); current_cost_s2 = (num_type1_blocks * block_type1["block_equivalent_cost_mwh"] + num_type2_blocks * block_type2["block_equivalent_cost_mwh"])
-                        current_power_s2 = round(current_power_s2,3); current_capacity_s2 = round(current_capacity_s2,3); current_cost_s2 = round(current_cost_s2,3)
+                        current_power_s2 = (num_type1_blocks * block_type1["pcs_power_mw"] + num_type2_blocks * block_type2["pcs_power_mw"])
+                        current_capacity_s2 = (num_type1_blocks * block_type1["block_dc_capacity_mwh"] + num_type2_blocks * block_type2["block_dc_capacity_mwh"])
+                        # V3.0: 计算真实成本（万元）
+                        current_equivalent_capacity_s2 = (num_type1_blocks * block_type1["block_equivalent_capacity_mwh"] + num_type2_blocks * block_type2["block_equivalent_capacity_mwh"])
+                        current_cost_s2 = current_equivalent_capacity_s2 * 100 * unit_price
+                        current_power_s2 = round(current_power_s2,3); current_capacity_s2 = round(current_capacity_s2,3); current_cost_s2 = round(current_cost_s2,2)
                         
                         # 检查容量约束
                         if current_capacity_s2 >= project_capacity_mwh - EPSILON:
@@ -360,8 +514,12 @@ def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, 
                         for n2 in range(1, num_total_sel_blocks - n1): 
                             n3 = num_total_sel_blocks - n1 - n2
                             if n3 >= 1:
-                                current_power_s3 = (n1*block_type1["pcs_power_mw"] + n2*block_type2["pcs_power_mw"] + n3*block_type3["pcs_power_mw"]); current_capacity_s3 = (n1*block_type1["block_dc_capacity_mwh"] + n2*block_type2["block_dc_capacity_mwh"] + n3*block_type3["block_dc_capacity_mwh"]); current_cost_s3 = (n1*block_type1["block_equivalent_cost_mwh"] + n2*block_type2["block_equivalent_cost_mwh"] + n3*block_type3["block_equivalent_cost_mwh"])
-                                current_power_s3 = round(current_power_s3,3); current_capacity_s3 = round(current_capacity_s3,3); current_cost_s3 = round(current_cost_s3,3)
+                                current_power_s3 = (n1*block_type1["pcs_power_mw"] + n2*block_type2["pcs_power_mw"] + n3*block_type3["pcs_power_mw"])
+                                current_capacity_s3 = (n1*block_type1["block_dc_capacity_mwh"] + n2*block_type2["block_dc_capacity_mwh"] + n3*block_type3["block_dc_capacity_mwh"])
+                                # V3.0: 计算真实成本（万元）
+                                current_equivalent_capacity_s3 = (n1*block_type1["block_equivalent_capacity_mwh"] + n2*block_type2["block_equivalent_capacity_mwh"] + n3*block_type3["block_equivalent_capacity_mwh"])
+                                current_cost_s3 = current_equivalent_capacity_s3 * 100 * unit_price
+                                current_power_s3 = round(current_power_s3,3); current_capacity_s3 = round(current_capacity_s3,3); current_cost_s3 = round(current_cost_s3,2)
                                 
                                 # 检查容量约束
                                 if current_capacity_s3 >= project_capacity_mwh - EPSILON:
@@ -403,7 +561,8 @@ def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, 
         best_solution["block_details_for_display"] = []
         for desc in sorted(block_counts_condensed.keys()): 
             C_data = block_counts_condensed[desc]; total_count = C_data["count"]; block_sample = C_data["data"] 
-            message_detail_str = f"{total_count} x [{desc} | 单块交流功率:{block_sample['pcs_power_mw']:.3f}MW, 单块直流容量:{block_sample['block_dc_capacity_mwh']:.3f}MWh, 单块等效成本:{block_sample['block_equivalent_cost_mwh']:.3f}MWh]"
+            # V3.0: 改为显示等效容量而非等效成本
+            message_detail_str = f"{total_count} x [{desc} | 单块交流功率:{block_sample['pcs_power_mw']:.3f}MW, 单块直流容量:{block_sample['block_dc_capacity_mwh']:.3f}MWh, 单块等效容量:{block_sample['block_equivalent_capacity_mwh']:.3f}MWh]"
             best_solution["block_details_for_message"].append(message_detail_str)
             
             # 构建 block_details_for_display
@@ -445,6 +604,22 @@ def get_optimal_solution_for_dc_family(target_dc_family, project_power_mw, proje
         return {"message": f"基于 {target_dc_family} 直流技术: 项目容量必须为正 (当功率大于0时)。", "cost": float('inf'), "dc_family_technology": target_dc_family, "min_device_sets": min_device_sets}
 
     duration_hours, system_hour_type = calculate_project_duration_type(project_power_mw, project_capacity_mwh)
+    
+    # V3.0: 检查是否为1h或8h系统（不支持）
+    if system_hour_type == 1 or system_hour_type == 8:
+        return {
+            "message": "暂不支持1或8小时系统",
+            "cost": float('inf'),
+            "power": 0,
+            "capacity": 0,
+            "project_duration_hours": duration_hours,
+            "system_hour_type": system_hour_type,
+            "dc_family_technology": target_dc_family,
+            "min_device_sets": min_device_sets,
+            "chosen_global_dc_specs": [],
+            "block_details_for_message": [],
+            "block_details_for_display": []
+        }
     all_candidate_solutions = [] 
     accumulated_warnings_from_find_best = set()
     dc_specs_for_family = [name for name, spec in DC_CONTAINER_SPECS.items() if spec["family"] == target_dc_family]
@@ -456,7 +631,7 @@ def get_optimal_solution_for_dc_family(target_dc_family, project_power_mw, proje
     for current_global_dc_names in global_dc_choices:
         available_ess_blocks = generate_single_ess_block_configs(current_global_dc_names, system_hour_type, duration_hours, target_dc_family)
         if not available_ess_blocks: continue
-        solution_from_find_best = find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, available_ess_blocks, max_device_sets)
+        solution_from_find_best = find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, available_ess_blocks, system_hour_type, target_dc_family, max_device_sets)
         if abs(solution_from_find_best["cost"] - float('inf')) > EPSILON: 
             solution_from_find_best["pcs_config_summary"] = get_pcs_configuration_summary_map(solution_from_find_best.get("blocks_config"))
             solution_from_find_best["total_dc_containers"] = get_total_physical_dc_containers_count(solution_from_find_best.get("blocks_config")) 
@@ -473,7 +648,9 @@ def get_optimal_solution_for_dc_family(target_dc_family, project_power_mw, proje
         return overall_best_solution_for_family
     else:
         abs_min_cost = min(s["cost"] for s in all_candidate_solutions)
-        COST_SIMILARITY_THRESHOLD = 0.1 
+        # V3.0: 成本相似阈值改为动态计算（万元）
+        unit_price = get_unit_price(system_hour_type, target_dc_family)
+        COST_SIMILARITY_THRESHOLD = 0.1 * 100 * unit_price if unit_price else 5.0  # 默认5万元
         cost_acceptable_solutions = [s for s in all_candidate_solutions if s["cost"] <= abs_min_cost + COST_SIMILARITY_THRESHOLD + EPSILON]
         if not cost_acceptable_solutions: 
             cost_acceptable_solutions = [s for s in all_candidate_solutions if abs(s["cost"] - abs_min_cost) < EPSILON]
@@ -487,6 +664,17 @@ def get_optimal_solution_for_dc_family(target_dc_family, project_power_mw, proje
             overall_best_solution_for_family["system_hour_type"] = system_hour_type
             overall_best_solution_for_family["dc_family_technology"] = target_dc_family
             overall_best_solution_for_family["min_device_sets"] = min_device_sets
+            
+            # V3.0: 添加单价和等效容量
+            unit_price = get_unit_price(system_hour_type, target_dc_family)
+            overall_best_solution_for_family["unit_price"] = unit_price
+            # 计算等效容量：总成本 ÷ (100 × 单价)
+            if unit_price and unit_price > 0:
+                overall_best_solution_for_family["equivalent_capacity"] = round(overall_best_solution_for_family["cost"] / (100 * unit_price), 3)
+            else:
+                overall_best_solution_for_family["equivalent_capacity"] = 0
+            # 将cost字段重命名为total_cost（但保留cost用于内部比较）
+            overall_best_solution_for_family["total_cost"] = overall_best_solution_for_family["cost"]
             
             # 生成详细消息
             if abs(overall_best_solution_for_family["cost"] - float('inf')) > EPSILON:
@@ -568,7 +756,10 @@ def get_optimal_solution_for_dc_family(target_dc_family, project_power_mw, proje
                 else:
                     message_lines.append(f"最终配置的交流总功率 (实际可输出): {actual_power_output:.3f} MW")
                 message_lines.append(f"最终配置的直流总容量: {overall_best_solution_for_family['capacity']:.3f} MWh")
-                message_lines.append(f"总等效成本: {overall_best_solution_for_family['cost']:.3f} MWh (电池等效)")
+                # V3.0: 显示等效容量、单价和真实成本
+                message_lines.append(f"总等效容量: {overall_best_solution_for_family.get('equivalent_capacity', 0):.3f} MWh")
+                message_lines.append(f"应用单价: {overall_best_solution_for_family.get('unit_price', 0):.2f} 元/Wh ({overall_best_solution_for_family['system_hour_type']}h系统, {target_dc_family}家族)")
+                message_lines.append(f"项目总成本: {overall_best_solution_for_family.get('total_cost', 0):.2f} 万元")
                 message_lines.append(f"详细ESS单元块构成 (供参考):")
                 message_lines.extend([f"  - {item}" for item in overall_best_solution_for_family.get("block_details_for_message", [])])
                 
@@ -595,11 +786,19 @@ def get_overall_optimal_solution(project_power_mw, project_capacity_mwh, max_dev
 
     chosen_solution = None
     if cost_5mw == float('inf') and cost_7_5mw == float('inf'):
+        # V3.0: 检查是否是1h/8h系统被拒绝
+        msg_5mw = solution_5mw.get("message", "")
+        msg_7_5mw = solution_7_5mw.get("message", "")
+        if "暂不支持1或8小时系统" in msg_5mw or "暂不支持1或8小时系统" in msg_7_5mw:
+            final_message = "暂不支持1或8小时系统"
+        else:
+            final_message = "所有直流技术方案均未能找到合适的配置。请检查输入参数或系统配置规则。"
+        
         return {
             "cost": float('inf'), "power": 0, "capacity": 0,
             "chosen_global_dc_specs": [], "project_duration_hours": calculate_project_duration_type(project_power_mw, project_capacity_mwh)[0],
             "system_hour_type": calculate_project_duration_type(project_power_mw, project_capacity_mwh)[1],
-            "message": "所有直流技术方案均未能找到合适的配置。请检查输入参数或系统配置规则。",
+            "message": final_message,
             "block_details_for_message": [], "block_details_for_display": [], "dc_family_technology": "无",
             "min_device_sets": min_device_sets
         }
@@ -609,7 +808,9 @@ def get_overall_optimal_solution(project_power_mw, project_capacity_mwh, max_dev
         chosen_solution = solution_7_5mw
     
     final_result = {
-        "cost": chosen_solution.get("cost"),
+        "total_cost": chosen_solution.get("total_cost", chosen_solution.get("cost")),  # V3.0: 使用total_cost
+        "equivalent_capacity": chosen_solution.get("equivalent_capacity", 0),  # V3.0: 新增
+        "unit_price": chosen_solution.get("unit_price", 0),  # V3.0: 新增
         "power": chosen_solution.get("power"),
         "capacity": chosen_solution.get("capacity"),
         "chosen_global_dc_specs": chosen_solution.get("chosen_global_dc_specs", []),
