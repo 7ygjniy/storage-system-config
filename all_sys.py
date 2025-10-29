@@ -392,9 +392,24 @@ def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, 
         
     # V3.0: 内部成本平衡阈值改为动态计算（万元）
     INTERNAL_COST_TIE_EPSILON = 0.01 * 100 * unit_price  # 0.01 MWh × 100 × 单价
+    
+    # === 性能优化1: 预计算减簇标记 ===
+    block_has_reduced = {}
+    for block in available_ess_blocks:
+        has_reduced = False
+        for dc_detail in block.get("dc_containers_detail_list", []):
+            dc_spec = get_dc_spec_by_name(dc_detail["name"])
+            if dc_spec["reduced_clusters"] > 0:
+                has_reduced = True
+                break
+        block_has_reduced[block["block_description"]] = has_reduced
+    
+    # === 性能优化2: 缓存系统时长（避免重复计算）===
+    cached_system_hour_type = system_hour_type
+    cached_duration_hours = project_capacity_mwh / project_power_mw if project_power_mw > EPSILON else 0
 
     def _calculate_actual_power_output(blocks_config):
-        """计算考虑PCS和直流容量双重约束的实际功率输出"""
+        """计算考虑PCS和直流容量双重约束的实际功率输出（性能优化：使用缓存的系统时长）"""
         total_actual_power = 0
         for num_blocks, block_data in blocks_config:
             # 获取单个块的参数
@@ -402,9 +417,9 @@ def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, 
             block_dc_capacity = block_data["block_dc_capacity_mwh"]
             
             # 统一公式：min(PCS额定功率, 直流容量÷系统时长)
-            duration_hours, system_hour_type_calc = calculate_project_duration_type(project_power_mw, project_capacity_mwh)
-            if system_hour_type_calc > EPSILON:
-                dc_limited_power = block_dc_capacity / system_hour_type_calc
+            # 性能优化：使用缓存的系统时长，避免重复计算
+            if cached_system_hour_type > EPSILON:
+                dc_limited_power = block_dc_capacity / cached_system_hour_type
                 actual_block_power = min(pcs_rated_power, dc_limited_power)
             else:
                 # 特殊情况：系统时长为0时，按PCS额定功率计算
@@ -447,13 +462,8 @@ def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, 
                 current_blocks_config = sorted([(num_total_sel_blocks, block_type1)], key=lambda x:x[1]["block_description"])
                 
                 # 检查是否包含减簇配置，决定是否应用实际功率约束
-                has_reduced_clusters = False
-                for dc_detail in block_type1.get("dc_containers_detail_list", []):
-                    dc_name = dc_detail["name"]
-                    dc_spec = get_dc_spec_by_name(dc_name)
-                    if dc_spec["reduced_clusters"] > 0:
-                        has_reduced_clusters = True
-                        break
+                # 性能优化：使用预计算的减簇标记
+                has_reduced_clusters = block_has_reduced[block_type1["block_description"]]
                 
                 if has_reduced_clusters:
                     # 有减簇配置时，检查实际功率输出约束
@@ -484,16 +494,11 @@ def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, 
                             current_blocks_config_s2 = sorted([(num_type1_blocks, block_type1), (num_type2_blocks, block_type2)], key=lambda x: x[1]["block_description"])
                             
                             # 检查是否包含减簇配置，决定是否应用实际功率约束
-                            has_reduced_clusters_s2 = False
-                            for _, block_data in current_blocks_config_s2:
-                                for dc_detail in block_data.get("dc_containers_detail_list", []):
-                                    dc_name = dc_detail["name"]
-                                    dc_spec = get_dc_spec_by_name(dc_name)
-                                    if dc_spec["reduced_clusters"] > 0:
-                                        has_reduced_clusters_s2 = True
-                                        break
-                                if has_reduced_clusters_s2:
-                                    break
+                            # 性能优化：使用预计算的减簇标记
+                            has_reduced_clusters_s2 = any(
+                                block_has_reduced[block_data["block_description"]]
+                                for _, block_data in current_blocks_config_s2
+                            )
                             
                             if has_reduced_clusters_s2:
                                 # 有减簇配置时，检查实际功率输出约束
@@ -510,42 +515,45 @@ def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, 
                 for block_indices_combo in combinations(range(len(available_ess_blocks)), 3):
                     block_type1 = available_ess_blocks[block_indices_combo[0]]; block_type2 = available_ess_blocks[block_indices_combo[1]]; block_type3 = available_ess_blocks[block_indices_combo[2]]
                     if len(set([block_type1["block_description"], block_type2["block_description"], block_type3["block_description"]])) < 3: continue
-                    for n1 in range(1, num_total_sel_blocks - 1): 
+                    for n1 in range(1, num_total_sel_blocks - 1):
+                        # 性能优化3: 预计算n1的容量贡献（用于快速容量检查）
+                        n1_capacity = n1 * block_type1["block_dc_capacity_mwh"]
+                        
                         for n2 in range(1, num_total_sel_blocks - n1): 
                             n3 = num_total_sel_blocks - n1 - n2
                             if n3 >= 1:
+                                # 性能优化3: 容量预检查（提前剪枝）
+                                current_capacity_s3 = n1_capacity + n2*block_type2["block_dc_capacity_mwh"] + n3*block_type3["block_dc_capacity_mwh"]
+                                
+                                # 如果容量不满足要求，直接跳过（避免计算功率和成本）
+                                if current_capacity_s3 < project_capacity_mwh - EPSILON:
+                                    continue
+                                
+                                # 通过容量检查后，才计算功率和成本
                                 current_power_s3 = (n1*block_type1["pcs_power_mw"] + n2*block_type2["pcs_power_mw"] + n3*block_type3["pcs_power_mw"])
-                                current_capacity_s3 = (n1*block_type1["block_dc_capacity_mwh"] + n2*block_type2["block_dc_capacity_mwh"] + n3*block_type3["block_dc_capacity_mwh"])
                                 # V3.0: 计算真实成本（万元）
                                 current_equivalent_capacity_s3 = (n1*block_type1["block_equivalent_capacity_mwh"] + n2*block_type2["block_equivalent_capacity_mwh"] + n3*block_type3["block_equivalent_capacity_mwh"])
                                 current_cost_s3 = current_equivalent_capacity_s3 * 100 * unit_price
                                 current_power_s3 = round(current_power_s3,3); current_capacity_s3 = round(current_capacity_s3,3); current_cost_s3 = round(current_cost_s3,2)
                                 
-                                # 检查容量约束
-                                if current_capacity_s3 >= project_capacity_mwh - EPSILON:
-                                    current_blocks_config_s3 = sorted([(n1, block_type1), (n2, block_type2), (n3, block_type3)], key=lambda x: x[1]["block_description"])
-                                    
-                                    # 检查是否包含减簇配置，决定是否应用实际功率约束
-                                    has_reduced_clusters_s3 = False
-                                    for _, block_data in current_blocks_config_s3:
-                                        for dc_detail in block_data.get("dc_containers_detail_list", []):
-                                            dc_name = dc_detail["name"]
-                                            dc_spec = get_dc_spec_by_name(dc_name)
-                                            if dc_spec["reduced_clusters"] > 0:
-                                                has_reduced_clusters_s3 = True
-                                                break
-                                        if has_reduced_clusters_s3:
-                                            break
-                                    
-                                    if has_reduced_clusters_s3:
-                                        # 有减簇配置时，检查实际功率输出约束
-                                        actual_power_output_s3 = _calculate_actual_power_output(current_blocks_config_s3)
-                                        if actual_power_output_s3 >= project_power_mw - EPSILON:
-                                            _update_internal_best_solution(current_cost_s3, current_power_s3, current_capacity_s3, current_blocks_config_s3)
-                                    else:
-                                        # 无减簇配置时，只需检查额定功率约束
-                                        if current_power_s3 >= project_power_mw - EPSILON:
-                                            _update_internal_best_solution(current_cost_s3, current_power_s3, current_capacity_s3, current_blocks_config_s3)
+                                current_blocks_config_s3 = sorted([(n1, block_type1), (n2, block_type2), (n3, block_type3)], key=lambda x: x[1]["block_description"])
+                                
+                                # 检查是否包含减簇配置，决定是否应用实际功率约束
+                                # 性能优化：使用预计算的减簇标记
+                                has_reduced_clusters_s3 = any(
+                                    block_has_reduced[block_data["block_description"]]
+                                    for _, block_data in current_blocks_config_s3
+                                )
+                                
+                                if has_reduced_clusters_s3:
+                                    # 有减簇配置时，检查实际功率输出约束
+                                    actual_power_output_s3 = _calculate_actual_power_output(current_blocks_config_s3)
+                                    if actual_power_output_s3 >= project_power_mw - EPSILON:
+                                        _update_internal_best_solution(current_cost_s3, current_power_s3, current_capacity_s3, current_blocks_config_s3)
+                                else:
+                                    # 无减簇配置时，只需检查额定功率约束
+                                    if current_power_s3 >= project_power_mw - EPSILON:
+                                        _update_internal_best_solution(current_cost_s3, current_power_s3, current_capacity_s3, current_blocks_config_s3)
     
     if abs(best_solution["cost"] - float('inf')) > EPSILON : 
         block_counts_condensed = {}; temp_block_list_for_condensing = []
