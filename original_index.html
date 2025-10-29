@@ -1441,7 +1441,7 @@
                     summaryTotalCost.textContent = "-";
                     summaryEquivalentCapacity.textContent = "-";
                     summaryUnitPrice.textContent = "-";
-                    totalCostCard.style.display = selectedSystemValue === "overall" ? "block" : "none";
+                    totalCostCard.style.display = "block";  // 始终显示
                     equivalentCapacityCard.style.display = "none";
                     unitPriceCard.style.display = "none";
                     summarySystemHourType.textContent = "-";
@@ -1468,10 +1468,10 @@
                 summaryActualPower.textContent = "-";
                 actualPowerCard.style.display = "none";
                 actualPowerNote.style.display = "none";
-                // V3.0: 清除新字段
+                // V3.0: 清除新字段（所有系统配置都显示）
                 summaryEquivalentCapacity.textContent = "-";
                 summaryUnitPrice.textContent = "-";
-                totalCostCard.style.display = selectedSystemValue === "overall" ? "block" : "none";
+                totalCostCard.style.display = "block";  // 始终显示，等待数据填充
                 equivalentCapacityCard.style.display = "none";
                 unitPriceCard.style.display = "none";
                 acSideList.innerHTML = ""; dcSideList.innerHTML = "";
@@ -1581,31 +1581,25 @@
                     paramChosenDcSpecs.textContent = finalResult.chosen_global_dc_specs ? finalResult.chosen_global_dc_specs.join(", ") : "-";
                     solutionParametersSection.style.display = "block";
                     
-                    // V3.0: 显示真实成本、等效容量和单价
-                    if (selectedSystemValue === "overall") {
-                        if (finalResult.total_cost !== undefined && finalResult.total_cost !== Infinity) {
-                            summaryTotalCost.textContent = finalResult.total_cost.toFixed(2);
-                            totalCostCard.style.display = "block";
-                        } else {
-                            totalCostCard.style.display = "none";
-                        }
-                        
-                        if (finalResult.equivalent_capacity !== undefined) {
-                            summaryEquivalentCapacity.textContent = finalResult.equivalent_capacity.toFixed(3);
-                            equivalentCapacityCard.style.display = "block";
-                        } else {
-                            equivalentCapacityCard.style.display = "none";
-                        }
-                        
-                        if (finalResult.unit_price !== undefined && finalResult.unit_price > 0) {
-                            summaryUnitPrice.textContent = finalResult.unit_price.toFixed(2);
-                            unitPriceCard.style.display = "block";
-                        } else {
-                            unitPriceCard.style.display = "none";
-                        }
+                    // V3.0: 显示真实成本、等效容量和单价（所有系统配置都显示）
+                    if (finalResult.total_cost !== undefined && finalResult.total_cost !== Infinity) {
+                        summaryTotalCost.textContent = finalResult.total_cost.toFixed(2);
+                        totalCostCard.style.display = "block";
                     } else {
                         totalCostCard.style.display = "none";
+                    }
+                    
+                    if (finalResult.equivalent_capacity !== undefined) {
+                        summaryEquivalentCapacity.textContent = finalResult.equivalent_capacity.toFixed(3);
+                        equivalentCapacityCard.style.display = "block";
+                    } else {
                         equivalentCapacityCard.style.display = "none";
+                    }
+                    
+                    if (finalResult.unit_price !== undefined && finalResult.unit_price > 0) {
+                        summaryUnitPrice.textContent = finalResult.unit_price.toFixed(2);
+                        unitPriceCard.style.display = "block";
+                    } else {
                         unitPriceCard.style.display = "none";
                     }
 
