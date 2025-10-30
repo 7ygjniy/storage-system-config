@@ -377,16 +377,28 @@ def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, 
         best_solution["user_limit_warning"] = "由于套数限制或无可用单元块，无法进行有效搜索。"
         return best_solution
     
-    # V2.25: 动态性能优化 - 根据系统时长类型决定S3搜索上限
+    # V2.25 & V3.1性能优化: 根据系统时长类型和项目规模决定S3搜索上限
     s3_max_sets = 10  # Default
     if system_hour_type == 1:
         s3_max_sets = 200
     elif system_hour_type == 2:
-        s3_max_sets = 60
+        # 2h系统：根据项目规模动态调整
+        if project_power_mw <= 20:
+            s3_max_sets = 15   # 小项目: 理论需要3-8套，留2倍余量
+        elif project_power_mw <= 100:
+            s3_max_sets = 30   # 中大项目: 理论需要7-14套，留2倍余量
+        else:
+            s3_max_sets = 50   # 超大项目: 理论需要14-40套，留余量
     elif system_hour_type == 4:
-        s3_max_sets = 20
+        # 4h系统：根据项目规模动态调整
+        if project_power_mw <= 20:
+            s3_max_sets = 10   # 小项目
+        elif project_power_mw <= 100:
+            s3_max_sets = 15   # 中大项目
+        else:
+            s3_max_sets = 20   # 超大项目（保持原值）
     elif system_hour_type == 6:
-        s3_max_sets = 10
+        s3_max_sets = 10  # 6h系统保持不变
     elif system_hour_type >= 8:
         s3_max_sets = 5
         
