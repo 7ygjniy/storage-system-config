@@ -327,6 +327,12 @@ def generate_single_ess_block_configs(global_dc_spec_names, system_hour_type, pr
                         "block_description": block_desc_str
                     })
     
+    # V3.2: 将2.5MW PCS配置移到列表前面，确保在组合搜索中优先被考虑
+    # 这样可以提高包含2.5MW的方案被生成的概率
+    blocks_25mw = [b for b in ess_blocks if b['pcs_name'] == 'PCS_2_5MW']
+    blocks_other = [b for b in ess_blocks if b['pcs_name'] != 'PCS_2_5MW']
+    ess_blocks = blocks_25mw + blocks_other
+    
     return ess_blocks
 
 def find_best_combination_of_ess_blocks(project_power_mw, project_capacity_mwh, available_ess_blocks, system_hour_type, target_dc_family, max_device_sets=100):
@@ -668,15 +674,51 @@ def get_optimal_solution_for_dc_family(target_dc_family, project_power_mw, proje
         return overall_best_solution_for_family
     else:
         abs_min_cost = min(s["cost"] for s in all_candidate_solutions)
-        # V3.0: 成本相似阈值改为动态计算（万元）
+        # V3.2: 成本相似阈值改为混合方案（容量比例 + 最小最大限制）
         unit_price = get_unit_price(system_hour_type, target_dc_family)
-        COST_SIMILARITY_THRESHOLD = 0.1 * 100 * unit_price if unit_price else 5.0  # 默认5万元
+        
+        # 混合方案：基于项目容量的动态阈值，最小0.05MWh，最大0.8MWh
+        threshold_capacity = max(0.05, min(0.8, project_capacity_mwh * 0.001))
+        
+        COST_SIMILARITY_THRESHOLD = threshold_capacity * 100 * unit_price if unit_price else 5.0
+        
         cost_acceptable_solutions = [s for s in all_candidate_solutions if s["cost"] <= abs_min_cost + COST_SIMILARITY_THRESHOLD + EPSILON]
         if not cost_acceptable_solutions: 
             cost_acceptable_solutions = [s for s in all_candidate_solutions if abs(s["cost"] - abs_min_cost) < EPSILON]
             if not cost_acceptable_solutions and all_candidate_solutions: cost_acceptable_solutions = [min(all_candidate_solutions, key=lambda x:x["cost"])]
-        if cost_acceptable_solutions: 
-            cost_acceptable_solutions.sort(key=lambda s: (s.get("total_dc_containers", float('inf')), s["cost"], s["power"], 1 if s.get("user_limit_warning") else 0 ))
+        if cost_acceptable_solutions:
+            # V3.2: 增加配置规整性评分
+            def calculate_config_regularity_score(solution):
+                """
+                计算配置规整性评分（越小越好）
+                评分规则：优先选择使用单一型号电池舱的配置，避免混合型号
+                """
+                blocks = solution.get("blocks_config", [])
+                if not blocks:
+                    return 999  # 无配置，最差评分
+                
+                # 电池舱型号规整性评分
+                regularity_score = 0
+                for count, block in blocks:
+                    dc_list = block.get("dc_containers_detail_list", [])
+                    # 统计该ESS块中使用的不同电池舱型号数量
+                    unique_dc_types = len(set(dc["name"] for dc in dc_list))
+                    # 混合型号惩罚，单一型号奖励
+                    if unique_dc_types > 1:
+                        regularity_score += unique_dc_types * 10  # 混合型号惩罚
+                    else:
+                        regularity_score += 1  # 单一型号奖励
+                
+                return regularity_score
+            
+            # 排序：电池舱总数 -> 成本 -> 配置规整性 -> 功率
+            cost_acceptable_solutions.sort(key=lambda s: (
+                s.get("total_dc_containers", float('inf')),  # 第一优先级：电池舱总数
+                s["cost"],                                    # 第二优先级：成本
+                calculate_config_regularity_score(s),        # 第三优先级：配置规整性（新增）
+                s["power"],                                  # 第四优先级：功率
+                1 if s.get("user_limit_warning") else 0      # 第五优先级：警告
+            ))
             best_of_the_best = cost_acceptable_solutions[0]
             overall_best_solution_for_family.update(best_of_the_best)
             overall_best_solution_for_family["chosen_global_dc_specs"] = [DC_CONTAINER_SPECS[name].get("name_cn", name) for name in best_of_the_best.get("chosen_global_dc_specs_raw", [])]
